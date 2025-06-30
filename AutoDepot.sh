@@ -285,7 +285,6 @@ patch_with_steamless() {
         [[ -z "$selected_appid" ]] && zenity --error --text="App ID not found." && return
     fi
 
-    # Find the actual game folder path by matching folder name exactly
     local game_dir=""
     for lib in "${libraries[@]}"; do
         for d in "$lib/steamapps/common/"*; do
@@ -306,19 +305,42 @@ patch_with_steamless() {
         return 1
     fi
 
-    cd "$BASE_DIR"
-    
-    local steamless_url_encoded="aHR0cHM6Ly9naXRodWIuY29tL2F0b20wcy9TdGVhbWxlc3MvcmVsZWFzZXMvZG93bmxvYWQvdjMuMS4wLjUvU3RlYW1sZXNzLjYzMTAtLjAuNS4tLmJ5LmF0b20wcy56aXA="
+    cd "$BASE_DIR" || return 1
+
+    local steamless_url_encoded="aHR0cHM6Ly9naXRodWIuY29tL2F0b20wcy9TdGVhbWxlc3MvcmVsZWFzZXMvZG93bmxvYWQvdjMuMS4wLjUvU3RlYW1sZXNzLnYzLjEuMC41Li0uYnkuYXRvbTBzLnppcA=="
     local steamless_url
     steamless_url=$(echo "$steamless_url_encoded" | base64 --decode)
 
-    curl -L -o steamless.zip "$steamless_url"
+    if ! curl -fL --retry 3 --retry-delay 2 -o steamless.zip "$steamless_url"; then
+        if [ -t 0 ]; then
+            echo "Error: Failed to download Steamless from $steamless_url"
+        else
+            zenity --error --text="Failed to download Steamless from:\n$steamless_url"
+        fi
+        return 1
+    fi
 
     rm -rf steamless
     mkdir -p steamless
-    unzip -oq steamless.zip -d steamless
+    if ! unzip -o steamless.zip -d steamless > /dev/null; then
+        if [ -t 0 ]; then
+            echo "Error: Failed to unzip steamless.zip"
+        else
+            zenity --error --text="Failed to unzip steamless.zip"
+        fi
+        return 1
+    fi
 
     rm -f steamless.zip
+
+    if [[ ! -f steamless/Steamless.CLI.exe ]]; then
+        if [ -t 0 ]; then
+            echo "Error: Steamless.CLI.exe not found after extraction"
+        else
+            zenity --error --text="Steamless.CLI.exe not found in extracted files"
+        fi
+        return 1
+    fi
 
     mapfile -t exe_list < <(find "$game_dir" -type f -iname "*.exe")
 
