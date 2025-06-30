@@ -3,6 +3,6 @@ Name=AutoDepot
 Comment=Fetch and run Steam depots automatically
 Exec=
 Icon=steam
-Terminal=true
+Terminal=false
 Type=Application
 Categories=Game;Utility;
