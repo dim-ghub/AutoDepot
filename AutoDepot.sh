@@ -6,8 +6,10 @@ VENV_DIR="$BASE_DIR/venv"
 PYGOB_DIR="$BASE_DIR/pygob"
 DEPOTS_DIR="$BASE_DIR/depots"
 PYTHON_BIN="$VENV_DIR/bin/python"
-REQS_URL="https://raw.githubusercontent.com/SteamAutoCracks/DepotDownloaderMod/refs/heads/master/Scripts/requirements.txt"
-PY_FILE_URL="https://raw.githubusercontent.com/SteamAutoCracks/DepotDownloaderMod/refs/heads/master/Scripts/storage_depotdownloadermod.py"
+ENCODED_REQS_URL="aHR0cHM6Ly9yYXcuZ2l0aHVidXNlcmNvbnRlbnQuY29tL1N0ZWFtQXV0b0NyYWNrcy9EZXBvdERvd25sb2FkZXJNb2QvcmVmcy9oZWFkcy9tYXN0ZXIvU2NyaXB0cy9yZXF1aXJlbWVudHMudHh0"
+REQS_URL=$(echo "$ENCODED_REQS_URL" | base64 --decode)
+ENCODED_PY_FILE_URL="aHR0cHM6Ly9yYXcuZ2l0aHVidXNlcmNvbnRlbnQuY29tL1N0ZWFtQXV0b0NyYWNrcy9EZXBvdERvd25sb2FkZXJNb2QvcmVmcy9oZWFkcy9tYXN0ZXIvU2NyaXB0cy9zdG9yYWdlX2RlcG90ZG93bmxvYWRlcm1vZC5weQ=="
+PY_FILE_URL=$(echo "$ENCODED_PY_FILE_URL" | base64 --decode)
 LOCAL_PY_FILE="$BASE_DIR/storage_depotdownloadermod.py"
 RAR_PATH="$BASE_DIR/Release.rar"
 RELEASE_DIR="$BASE_DIR/Release"
@@ -21,8 +23,10 @@ PYGOB_FILES=(
 )
 
 get_latest_release_rar_url() {
-    curl -s "https://api.github.com/repos/SteamAutoCracks/DepotDownloaderMod/releases/latest" \
-        | jq -r '.assets[] | select(.name=="Release.rar") | .browser_download_url'
+    local encoded_url="aHR0cHM6Ly9hcGkuZ2l0aHViLmNvbS9yZXBvcy9TdGVhbUF1dG9DcmFja3MvRGVwb3REb3dubG9hZGVyTW9kL3JlbGVhc2VzL2xhdGVzdA=="
+    local decoded_url
+    decoded_url=$(echo "$encoded_url" | base64 --decode)
+    curl -s "$decoded_url" | jq -r '.assets[] | select(.name=="Release.rar") | .browser_download_url'
 }
 
 get_steam_libraries() {
@@ -81,9 +85,14 @@ find_target_dir() {
 }
 
 download_files() {
+    local base_url_encoded="aHR0cHM6Ly9yYXcuZ2l0aHVidXNlcmNvbnRlbnQuY29tL1N0ZWFtQXV0b0NyYWNrcy9EZXBvdERvd25sb2FkZXJNb2QvcmVmcy9oZWFkcy9tYXN0ZXIvU2NyaXB0cy9weWdvYg=="
+    local base_url
+    base_url=$(echo "$base_url_encoded" | base64 --decode)
+
     for file in "${PYGOB_FILES[@]}"; do
-        curl -fsSL "https://raw.githubusercontent.com/SteamAutoCracks/DepotDownloaderMod/refs/heads/master/Scripts/pygob/$file" -o "$PYGOB_DIR/$file"
+        curl -fsSL "${base_url}/${file}" -o "$PYGOB_DIR/$file"
     done
+
     curl -fsSL "$PY_FILE_URL" -o "$LOCAL_PY_FILE"
 }
 
@@ -201,7 +210,11 @@ install_slssteam() {
 
     rm -rf SLSsteam
 
-    git clone "https://github.com/AceSLS/SLSsteam"
+    local git_url_encoded="aHR0cHM6Ly9naXRodWIuY29tL0FjZVNMUy9TTFNzdGVhbQ=="
+    local git_url
+    git_url=$(echo "$git_url_encoded" | base64 --decode)
+
+    git clone "$git_url"
     cd SLSsteam || exit 1
 
     make
@@ -294,7 +307,12 @@ patch_with_steamless() {
     fi
 
     cd "$BASE_DIR"
-    curl -L -o steamless.zip "https://github.com/atom0s/Steamless/releases/download/v3.1.0.5/Steamless.v3.1.0.5.-.by.atom0s.zip"
+    
+    local steamless_url_encoded="aHR0cHM6Ly9naXRodWIuY29tL2F0b20wcy9TdGVhbWxlc3MvcmVsZWFzZXMvZG93bmxvYWQvdjMuMS4wLjUvU3RlYW1sZXNzLjYzMTAtLjAuNS4tLmJ5LmF0b20wcy56aXA="
+    local steamless_url
+    steamless_url=$(echo "$steamless_url_encoded" | base64 --decode)
+
+    curl -L -o steamless.zip "$steamless_url"
 
     rm -rf steamless
     mkdir -p steamless
