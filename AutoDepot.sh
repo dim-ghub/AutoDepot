@@ -22,26 +22,26 @@ PYGOB_FILES=(
     "types.py"
 )
 
-check_os() {
-    if [[ -f /etc/os-release ]]; then
-        . /etc/os-release
-        if [[ "$ID" != "arch" ]]; then
-            echo "This script is intended for Arch Linux only."
-            exit 1
-        fi
-    else
-        echo "Cannot detect OS. Exiting."
+check_dependencies() {
+    local missing=()
+    local common_deps=(curl jq unrar python3 python3-venv wine)
+    local gui_deps=(zenity yad)
+
+    for dep in "${common_deps[@]}"; do
+        command -v "$dep" >/dev/null || missing+=("$dep")
+    done
+
+    if ! [ -t 0 ]; then
+        for dep in "${gui_deps[@]}"; do
+            command -v "$dep" >/dev/null || missing+=("$dep")
+        done
+    fi
+
+    if (( ${#missing[@]} )); then
+        echo "Missing required dependencies: ${missing[*]}"
+        echo "Please install them using your package manager before running this script."
         exit 1
     fi
-}
-
-install_dependencies() {
-    for tool in unrar jq; do
-        if ! command -v "$tool" &>/dev/null; then
-            echo "'$tool' not found, installing..."
-            pkexec pacman -Sy "$tool" --needed
-        fi
-    done
 }
 
 download_files() {
@@ -126,8 +126,7 @@ install_game_core() {
 }
 
 interactive_cli() {
-    check_os
-    install_dependencies
+    check_dependencies
     mkdir -p "$BASE_DIR" "$PYGOB_DIR" "$DEPOTS_DIR"
     cd "$BASE_DIR"
 
@@ -142,8 +141,8 @@ interactive_cli() {
 
     GAME_NAME=$(fetch_game_name "$APP_ID")
     if [[ -z "$GAME_NAME" ]]; then
-        echo "Could not retrieve game name. Proceeding without it."
-        GAME_NAME="UnknownGame_$APP_ID"
+        echo "Could not retrieve game name. Exiting."
+        exit 1
     else
         echo "Game detected: $GAME_NAME"
     fi
@@ -153,24 +152,7 @@ interactive_cli() {
 }
 
 gui_mode() {
-    if [[ -f /etc/os-release ]]; then
-        . /etc/os-release
-        if [[ "$ID" != "arch" ]]; then
-            zenity --error --text="This script is intended for Arch Linux only."
-            exit 1
-        fi
-    else
-        zenity --error --text="Cannot detect OS. Exiting."
-        exit 1
-    fi
-
-    for tool in unrar jq yad; do
-        if ! command -v "$tool" &>/dev/null; then
-            zenity --info --text="'$tool' not found, installing..."
-            pkexec pacman -Sy "$tool" --needed
-        fi
-    done
-
+    check_dependencies
     mkdir -p "$BASE_DIR" "$PYGOB_DIR" "$DEPOTS_DIR"
     cd "$BASE_DIR"
 
@@ -182,18 +164,15 @@ gui_mode() {
 
     yad --title="AutoDepot Installer" \
         --text="Installing game...\n\nJust sit back and relax, you'll be notified when the game is installed." \
-        --borders=10 \
-        --center \
-        --width=350 \
-        --button=OK &
+        --borders=10 --center --width=350 --button=OK &
 
     download_files
     setup_venv_and_deps
 
-    GAME_NAME=$(curl -s "https://store.steampowered.com/api/appdetails?appids=$APP_ID" | jq -r ".\"$APP_ID\".data.name")
-    if [[ "$GAME_NAME" == "null" || -z "$GAME_NAME" ]]; then
-        zenity --warning --text="Could not retrieve game name. Proceeding without it."
-        GAME_NAME="UnknownGame_$APP_ID"
+    GAME_NAME=$(fetch_game_name "$APP_ID")
+    if [[ -z "$GAME_NAME" ]]; then
+        zenity --error --text="Could not retrieve game name. Exiting."
+        exit 1
     else
         zenity --info --text="Game detected: $GAME_NAME"
     fi
@@ -202,10 +181,7 @@ gui_mode() {
 
     yad --title="AutoDepot Installer" \
         --text="Game installed successfully!\n\nHave fun playing!" \
-        --borders=10 \
-        --center \
-        --width=350 \
-        --button=OK
+        --borders=10 --center --width=350 --button=OK
 
     echo "[DONE] All steps completed successfully."
 }
