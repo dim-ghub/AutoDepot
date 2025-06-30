@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE_DIR="$HOME/AutoPirate"
+BASE_DIR="$HOME/AutoDepot"
 VENV_DIR="$BASE_DIR/venv"
 PYGOB_DIR="$BASE_DIR/pygob"
 DEPOTS_DIR="$BASE_DIR/depots"
@@ -163,3 +163,5 @@ else
 fi
 
 echo "[DONE] All steps completed successfully."
+
+notify-send "Game installed. Have fun!"
