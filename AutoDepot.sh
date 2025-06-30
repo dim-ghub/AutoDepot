@@ -26,11 +26,11 @@ PYGOB_FILES=(
 if [[ -f /etc/os-release ]]; then
     . /etc/os-release
     if [[ "$ID" != "arch" ]]; then
-        echo "This script is intended for Arch Linux only."
+        zenity --error --text="This script is intended for Arch Linux only."
         exit 1
     fi
 else
-    echo "Cannot detect OS. Exiting."
+    zenity --error --text="Cannot detect OS. Exiting."
     exit 1
 fi
 
@@ -39,7 +39,7 @@ mkdir -p "$BASE_DIR" "$PYGOB_DIR" "$DEPOTS_DIR"
 # Install unrar and jq if not present
 for tool in unrar jq; do
     if ! command -v "$tool" &>/dev/null; then
-        echo "[INFO] '$tool' not found, installing..."
+        zenity --info --text="'$tool' not found, installing..."
         pkexec pacman -Sy "$tool" --needed
     else
         echo "[INFO] '$tool' is already installed."
@@ -70,16 +70,20 @@ curl -fsSL "$REQS_URL" -o "$TMP_REQS"
 "$PYTHON_BIN" -m pip install pycryptodome
 rm "$TMP_REQS"
 
-# Prompt user for appid
-read -rp "Enter the appid: " APP_ID
+# Prompt user for appid with GUI dialog
+APP_ID=$(zenity --entry --title="Enter Steam App ID" --text="Please enter the Steam App ID:" --width=300)
+if [[ -z "$APP_ID" ]]; then
+    zenity --error --text="You must enter a valid App ID. Exiting."
+    exit 1
+fi
 
 # Get game name from Steam API
 GAME_NAME=$(curl -s "https://store.steampowered.com/api/appdetails?appids=$APP_ID" | jq -r ".\"$APP_ID\".data.name")
 if [[ "$GAME_NAME" == "null" || -z "$GAME_NAME" ]]; then
-    echo "[WARN] Could not retrieve game name. Proceeding without it."
+    zenity --warning --text="Could not retrieve game name. Proceeding without it."
     GAME_NAME="UnknownGame_$APP_ID"
 else
-    echo "[INFO] Game detected: $GAME_NAME"
+    zenity --info --text="Game detected: $GAME_NAME"
 fi
 
 # Clean up any old .bat, .key, and .manifest files
@@ -111,7 +115,7 @@ if [[ -f "$BAT_FILE" ]]; then
     echo "[INFO] Running $BAT_FILE..."
     WINEDEBUG=-all wine "$BAT_FILE"
 else
-    echo "[ERROR] Expected .bat file not found: $BAT_FILE"
+    zenity --error --text="Expected .bat file not found: $BAT_FILE"
     exit 1
 fi
 
@@ -162,6 +166,5 @@ else
     echo "[WARN] No subfolder found inside $COMBINED_DIR"
 fi
 
-echo "[DONE] All steps completed successfully."
-
 notify-send "Game installed. Have fun!"
+echo "[DONE] All steps completed successfully."
