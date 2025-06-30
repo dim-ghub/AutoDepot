@@ -1,7 +1,7 @@
 [Desktop Entry]
 Name=AutoDepot
 Comment=Fetch and run Steam depots automatically
-Exec=sh -c 'curl -fsSL https://raw.githubusercontent.com/dim-ghub/AutoDepot/refs/heads/main/AutoDepot.sh | bash'
+Exec=
 Icon=steam
 Terminal=true
 Type=Application
