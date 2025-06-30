@@ -34,137 +34,136 @@ else
     exit 1
 fi
 
-mkdir -p "$BASE_DIR" "$PYGOB_DIR" "$DEPOTS_DIR"
-
-# Install unrar and jq if not present
-for tool in unrar jq; do
+# Ensure dependencies jq, unrar, yad
+for tool in unrar jq yad; do
     if ! command -v "$tool" &>/dev/null; then
         zenity --info --text="'$tool' not found, installing..."
         pkexec pacman -Sy "$tool" --needed
-    else
-        echo "[INFO] '$tool' is already installed."
     fi
 done
 
-# Download pygob files
-echo "[INFO] Downloading pygob module files..."
-for file in "${PYGOB_FILES[@]}"; do
-    curl -fsSL "https://raw.githubusercontent.com/SteamAutoCracks/DepotDownloaderMod/refs/heads/master/Scripts/pygob/$file" -o "$PYGOB_DIR/$file"
-done
+mkdir -p "$BASE_DIR" "$PYGOB_DIR" "$DEPOTS_DIR"
+cd "$BASE_DIR"
 
-# Download the main Python script locally
-echo "[INFO] Downloading main python script..."
-curl -fsSL "$PY_FILE_URL" -o "$LOCAL_PY_FILE"
+# Prompt for App ID with zenity
+APP_ID=$(zenity --entry \
+    --title="Enter Steam App ID" \
+    --text="Please enter the Steam App ID:" \
+    --width=300)
 
-# Create venv if missing
-if [[ ! -d "$VENV_DIR" ]]; then
-    echo "[INFO] Creating python virtual environment..."
-    python3 -m venv "$VENV_DIR"
-fi
-
-# Upgrade pip and install dependencies
-"$PYTHON_BIN" -m pip install --upgrade pip
-TMP_REQS="$(mktemp)"
-curl -fsSL "$REQS_URL" -o "$TMP_REQS"
-"$PYTHON_BIN" -m pip install -r "$TMP_REQS"
-"$PYTHON_BIN" -m pip install pycryptodome
-rm "$TMP_REQS"
-
-# Prompt user for appid with GUI dialog
-APP_ID=$(zenity --entry --title="Enter Steam App ID" --text="Please enter the Steam App ID:" --width=300)
 if [[ -z "$APP_ID" ]]; then
     zenity --error --text="You must enter a valid App ID. Exiting."
     exit 1
 fi
 
-# Get game name from Steam API
-GAME_NAME=$(curl -s "https://store.steampowered.com/api/appdetails?appids=$APP_ID" | jq -r ".\"$APP_ID\".data.name")
-if [[ "$GAME_NAME" == "null" || -z "$GAME_NAME" ]]; then
-    zenity --warning --text="Could not retrieve game name. Proceeding without it."
-    GAME_NAME="UnknownGame_$APP_ID"
-else
-    zenity --info --text="Game detected: $GAME_NAME"
-fi
+# Show warning dialog that closing won't stop installation
+yad --title="AutoDepot Installer" \
+    --text="Installing game...\n\nJust sit back and relax, you'll be notified when the game is installed." \
+    --borders=10 \
+    --center \
+    --width=350 \
+    --button=OK
 
-# Clean up any old .bat, .key, and .manifest files
-echo "[INFO] Cleaning up old .bat, .key, and .manifest files..."
-find "$BASE_DIR" -type f \( -name "*.bat" -o -name "*.key" -o -name "*.manifest" \) -delete
+function install_game() {
+    # Download pygob files
+    for file in "${PYGOB_FILES[@]}"; do
+        curl -fsSL "https://raw.githubusercontent.com/SteamAutoCracks/DepotDownloaderMod/refs/heads/master/Scripts/pygob/$file" -o "$PYGOB_DIR/$file"
+    done
 
-# Run the Python script with appid and 1 as stdin
-echo "[INFO] Running Python script..."
-printf "%s\n1\n" "$APP_ID" | PYTHONPATH="$BASE_DIR" "$PYTHON_BIN" "$LOCAL_PY_FILE"
+    # Download main python script
+    curl -fsSL "$PY_FILE_URL" -o "$LOCAL_PY_FILE"
 
-# --- PREPARE .NET RUNTIME BEFORE .BAT ---
-echo "[INFO] Downloading Release.rar..."
-curl -fsSL -o "$RAR_PATH" "$RAR_URL"
+    # Create venv if missing
+    if [[ ! -d "$VENV_DIR" ]]; then
+        python3 -m venv "$VENV_DIR"
+    fi
 
-echo "[INFO] Extracting Release.rar..."
-unrar x -o+ "$RAR_PATH" "$BASE_DIR"
+    # Upgrade pip and install dependencies
+    "$PYTHON_BIN" -m pip install --upgrade pip
+    TMP_REQS="$(mktemp)"
+    curl -fsSL "$REQS_URL" -o "$TMP_REQS"
+    "$PYTHON_BIN" -m pip install -r "$TMP_REQS"
+    "$PYTHON_BIN" -m pip install pycryptodome
+    rm "$TMP_REQS"
 
-NET_DIR="$RELEASE_DIR/net9.0"
-echo "[INFO] Copying .json, .dll, and .exe files from net9.0 to $BASE_DIR..."
-find "$NET_DIR" -type f \( -name "*.json" -o -name "*.dll" -o -name "*.exe" \) -exec cp -f {} "$BASE_DIR/" \;
+    # Get game name from Steam API
+    GAME_NAME=$(curl -s "https://store.steampowered.com/api/appdetails?appids=$APP_ID" | jq -r ".\"$APP_ID\".data.name")
+    if [[ "$GAME_NAME" == "null" || -z "$GAME_NAME" ]]; then
+        zenity --warning --text="Could not retrieve game name. Proceeding without it."
+        GAME_NAME="UnknownGame_$APP_ID"
+    fi
 
-echo "[INFO] Cleaning up extracted files..."
-rm -f "$RAR_PATH"
-rm -rf "$RELEASE_DIR"
+    # Clean up old .bat, .key, and .manifest files
+    find "$BASE_DIR" -type f \( -name "*.bat" -o -name "*.key" -o -name "*.manifest" \) -delete
 
-# --- RUN THE .BAT FILE ---
-BAT_FILE="$BASE_DIR/${APP_ID}.bat"
-if [[ -f "$BAT_FILE" ]]; then
-    echo "[INFO] Running $BAT_FILE..."
-    WINEDEBUG=-all wine "$BAT_FILE"
-else
-    zenity --error --text="Expected .bat file not found: $BAT_FILE"
-    exit 1
-fi
+    # Run the Python script with appid and 1 as stdin
+    printf "%s\n1\n" "$APP_ID" | PYTHONPATH="$BASE_DIR" "$PYTHON_BIN" "$LOCAL_PY_FILE"
 
-# --- WAIT FOR DEPOTS TO POPULATE ---
-echo "[INFO] Waiting for depots to populate..."
-while [ -z "$(ls -A "$DEPOTS_DIR")" ]; do
-    sleep 1
-done
+    # Download Release.rar and extract runtime files
+    curl -fsSL -o "$RAR_PATH" "$RAR_URL"
+    unrar x -o+ "$RAR_PATH" "$BASE_DIR"
+    NET_DIR="$RELEASE_DIR/net9.0"
+    find "$NET_DIR" -type f \( -name "*.json" -o -name "*.dll" -o -name "*.exe" \) -exec cp -f {} "$BASE_DIR/" \;
+    rm -f "$RAR_PATH"
+    rm -rf "$RELEASE_DIR"
 
-# --- MERGE DEPOT FOLDERS ---
-COMBINED_DIR="$DEPOTS_DIR/$APP_ID"
-mkdir -p "$COMBINED_DIR"
+    # Run the .bat file
+    BAT_FILE="$BASE_DIR/${APP_ID}.bat"
+    if [[ -f "$BAT_FILE" ]]; then
+        WINEDEBUG=-all wine "$BAT_FILE"
+    else
+        zenity --error --text="Expected .bat file not found: $BAT_FILE"
+        kill "$YAD_PID" 2>/dev/null || true
+        exit 1
+    fi
 
-echo "[INFO] Merging depots into $COMBINED_DIR..."
-shopt -s dotglob
-for d in "$DEPOTS_DIR"/*/ ; do
-    [[ "$d" == "$COMBINED_DIR/" ]] && continue
-    cp -rn "$d"* "$COMBINED_DIR/"
-done
-shopt -u dotglob
+    # Wait for depots folder population
+    while [ -z "$(ls -A "$DEPOTS_DIR")" ]; do
+        sleep 1
+    done
 
-# --- CLEANUP UNUSED DEPOT FOLDERS ---
-echo "[INFO] Removing all other folders in depots except $APP_ID..."
-for d in "$DEPOTS_DIR"/*; do
-    [[ "$d" == "$COMBINED_DIR" ]] && continue
-    rm -rf "$d"
-done
+    # Merge depot folders
+    COMBINED_DIR="$DEPOTS_DIR/$APP_ID"
+    mkdir -p "$COMBINED_DIR"
+    shopt -s dotglob
+    for d in "$DEPOTS_DIR"/*/ ; do
+        [[ "$d" == "$COMBINED_DIR/" ]] && continue
+        cp -rn "$d"* "$COMBINED_DIR/"
+    done
+    shopt -u dotglob
 
-# --- LAUNCH GAME AND DISOWN STEAM ---
-echo "[INFO] Launching game through Steam..."
-steam "steam://rungameid/$APP_ID" & disown
+    # Remove all other folders except combined
+    for d in "$DEPOTS_DIR"/*; do
+        [[ "$d" == "$COMBINED_DIR" ]] && continue
+        rm -rf "$d"
+    done
 
-# --- WAIT FOR GAME INSTALL FOLDER ---
-TARGET_GAME_DIR="$STEAM_COMMON/$GAME_NAME"
-echo "[INFO] Waiting for game folder: $TARGET_GAME_DIR"
-while [[ ! -d "$TARGET_GAME_DIR" ]]; do
-    sleep 1
-done
-echo "[INFO] Game directory detected."
+    # Launch Steam game and disown process
+    steam "steam://rungameid/$APP_ID" & disown
 
-# --- MOVE EXTRACTED CONTENT INTO GAME DIR ---
-echo "[INFO] Searching for random-numbered subdir in $COMBINED_DIR..."
-RANDOM_SUBDIR=$(find "$COMBINED_DIR" -mindepth 1 -maxdepth 1 -type d | head -n 1)
-if [[ -d "$RANDOM_SUBDIR" ]]; then
-    echo "[INFO] Moving contents of $RANDOM_SUBDIR to $TARGET_GAME_DIR..."
-    cp -rf "$RANDOM_SUBDIR/"* "$TARGET_GAME_DIR/"
-else
-    echo "[WARN] No subfolder found inside $COMBINED_DIR"
-fi
+    # Wait for game install folder
+    TARGET_GAME_DIR="$STEAM_COMMON/$GAME_NAME"
+    while [[ ! -d "$TARGET_GAME_DIR" ]]; do
+        sleep 1
+    done
 
-notify-send "Game installed. Have fun!"
+    # Move extracted content into game folder
+    RANDOM_SUBDIR=$(find "$COMBINED_DIR" -mindepth 1 -maxdepth 1 -type d | head -n 1)
+    if [[ -d "$RANDOM_SUBDIR" ]]; then
+        cp -rf "$RANDOM_SUBDIR/"* "$TARGET_GAME_DIR/"
+    fi
+}
+
+install_game
+
+kill "$YAD_PID" 2>/dev/null || true
+
+# Show completion dialog with yad
+yad --title="AutoDepot Installer" \
+    --text="Game installed successfully!\n\nHave fun playing!" \
+    --borders=10 \
+    --center \
+    --width=350 \
+    --button=OK
+
 echo "[DONE] All steps completed successfully."
