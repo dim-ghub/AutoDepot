@@ -390,6 +390,124 @@ patch_with_steamless() {
     fi
 }
 
+patch_with_goldberg() {
+    mkdir -p "$BASE_DIR"
+
+    local goldberg_url_encoded="aHR0cHM6Ly9naXRsYWIuY29tL01yX0dvbGRiZXJnL2dvbGRiZXJnX2VtdWxhdG9yLy0vam9icy80MjQ3ODExMzEwL2FydGlmYWN0cy9kb3dubG9hZA=="
+    local goldberg_url
+    goldberg_url=$(echo "$goldberg_url_encoded" | base64 --decode)
+
+    local goldberg_zip="$BASE_DIR/Goldberg.zip"
+    local goldberg_dir="$BASE_DIR/Goldberg"
+    local find_interfaces_script="$goldberg_dir/linux/tools/find_interfaces.sh"
+
+    rm -rf "$goldberg_dir"
+    mkdir -p "$goldberg_dir"
+
+    if ! curl -L -o "$goldberg_zip" "$goldberg_url"; then
+        [ -t 0 ] && echo "Failed to download Goldberg archive." || zenity --error --text="Failed to download Goldberg archive."
+        return 1
+    fi
+
+    unzip -q "$goldberg_zip" -d "$goldberg_dir"
+    rm -f "$goldberg_zip"
+
+    local libraries=($(get_steam_libraries))
+    local games=()
+
+    for lib in "${libraries[@]}"; do
+        for mf in "$lib/steamapps/appmanifest_"*.acf; do
+            [[ -f "$mf" ]] || continue
+            local appid name
+            appid=$(grep '"appid"' "$mf" | grep -oE '[0-9]+')
+            name=$(grep '"name"' "$mf" | head -n1 | sed -E 's/.*"name"[[:space:]]+"([^"]+)".*/\1/')
+            [[ -n "$appid" && -n "$name" ]] && games+=("$appid::$name")
+        done
+    done
+
+    if [[ ${#games[@]} -eq 0 ]]; then
+        [ -t 0 ] && echo "No installed Steam games found." || zenity --error --text="No installed Steam games found."
+        return
+    fi
+
+    local selected_appid="" selection=""
+    if [ -t 0 ]; then
+        echo "Select a game to patch with Goldberg:"
+        for i in "${!games[@]}"; do
+            echo "$((i+1))) ${games[i]##*::}"
+        done
+        read -rp "Choice: " choice
+        [[ "$choice" =~ ^[0-9]+$ ]] || return
+        ((choice--))
+        [[ $choice -lt 0 || $choice -ge ${#games[@]} ]] && return
+        selection="${games[choice]##*::}"
+        selected_appid="${games[choice]%%::*}"
+    else
+        selection=$(zenity --list --title="Select Game to Patch with Goldberg" --column="Game" --width=500 --height=400 "${games[@]##*::}")
+        [[ -z "$selection" ]] && return
+        for g in "${games[@]}"; do
+            if [[ "${g##*::}" == "$selection" ]]; then
+                selected_appid="${g%%::*}"
+                break
+            fi
+        done
+        [[ -z "$selected_appid" ]] && zenity --error --text="App ID not found." && return
+    fi
+
+    local game_dir=""
+    for lib in "${libraries[@]}"; do
+        for d in "$lib/steamapps/common/"*; do
+            [[ -d "$d" ]] || continue
+            if [[ "$(basename "$d")" == "$selection" ]]; then
+                game_dir="$d"
+                break 2
+            fi
+        done
+    done
+
+    if [[ -z "$game_dir" ]]; then
+        [ -t 0 ] && echo "Could not find game folder for '$selection'" || zenity --error --text="Could not find game folder for '$selection'"
+        return 1
+    fi
+
+    local dll_file
+    dll_file=$(find "$game_dir" -type f \( -iname "steam_api.dll" -o -iname "steam_api64.dll" \) | head -n 1)
+
+    if [[ -z "$dll_file" ]]; then
+        [ -t 0 ] && echo "No Steam API DLL file found inside game directory." || zenity --error --text="No Steam API DLL file found inside game directory."
+        return 1
+    fi
+
+    if [[ ! -x "$find_interfaces_script" ]]; then
+        [ -t 0 ] && echo "Warning: find_interfaces.sh script not found or not executable." || zenity --warning --text="Warning: find_interfaces.sh script not found or not executable."
+    else
+        sh "$find_interfaces_script" "$dll_file" > "$(dirname "$dll_file")/steam_interfaces.txt"
+    fi
+
+    cp -f "$dll_file" "$dll_file.bak"
+    cp -f "$goldberg_dir/$(basename "$dll_file")" "$dll_file"
+
+    if [[ -z "$selected_appid" ]]; then
+        if [ -t 0 ]; then
+            read -rp "AppID not found automatically. Enter AppID for '$selection': " selected_appid
+            if [[ -z "$selected_appid" ]]; then
+                echo "No AppID provided. Aborting."
+                return 1
+            fi
+        else
+            selected_appid=$(zenity --entry --title="Enter AppID" --text="AppID not found automatically for $selection. Please enter AppID:" --width=300)
+            if [[ -z "$selected_appid" ]]; then
+                zenity --error --text="No AppID provided. Aborting."
+                return 1
+            fi
+        fi
+    fi
+
+    echo "$selected_appid" > "$(dirname "$dll_file")/steam_appid.txt"
+
+    [ -t 0 ] && echo "Goldberg emulator patched '$selection' successfully." || zenity --info --text="Goldberg emulator patched '$selection' successfully." --width=350 --height=100
+}
+
 gui_install_game() {
     mkdir -p "$BASE_DIR" "$PYGOB_DIR" "$DEPOTS_DIR"
     cd "$BASE_DIR"
@@ -435,7 +553,8 @@ gui_menu() {
         --hide-column=0 \
         1 "Download & install game by Steam App ID" \
         2 "Install SLSsteam" \
-        3 "Patch with Steamless")
+        3 "Patch with Steamless" \
+        4 "Patch with Goldberg")
 
     if [[ -z "$choice" ]]; then
         exit 0
@@ -445,6 +564,7 @@ gui_menu() {
         1) gui_install_game ;;
         2) install_slssteam ;;
         3) patch_with_steamless ;;
+        4) patch_with_goldberg ;;
         *) zenity --error --text="No valid option selected. Exiting." --width=300 --height=100; exit 1 ;;
     esac
 }
@@ -456,14 +576,16 @@ if [ -t 0 ]; then
             echo "1) Download & install game by Steam App ID"
             echo "2) Install SLSsteam"
             echo "3) Patch with Steamless"
-            echo "4) Exit"
+            echo "4) Patch with Goldberg"
+            echo "5) Exit"
             echo "========================"
             read -rp "Choose an option [1-4]: " choice
             case "$choice" in
                 1) interactive_cli ;;
                 2) install_slssteam ;;
                 3) patch_with_steamless ;;
-                4) echo "Exiting."; exit 0 ;;
+                4) patch_with_goldberg ;;
+                5) echo "Exiting."; exit 0 ;;
                 *) echo "Invalid choice. Try again." ;;
             esac
         done
