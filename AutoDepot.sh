@@ -9,10 +9,8 @@ PYTHON_BIN="$VENV_DIR/bin/python"
 REQS_URL="https://raw.githubusercontent.com/SteamAutoCracks/DepotDownloaderMod/refs/heads/master/Scripts/requirements.txt"
 PY_FILE_URL="https://raw.githubusercontent.com/SteamAutoCracks/DepotDownloaderMod/refs/heads/master/Scripts/storage_depotdownloadermod.py"
 LOCAL_PY_FILE="$BASE_DIR/storage_depotdownloadermod.py"
-RAR_URL="https://github.com/SteamAutoCracks/DepotDownloaderMod/releases/download/DepotDownloaderMod_3.4.0.2/Release.rar"
 RAR_PATH="$BASE_DIR/Release.rar"
 RELEASE_DIR="$BASE_DIR/Release"
-STEAM_COMMON="$HOME/.local/share/Steam/steamapps/common"
 
 PYGOB_FILES=(
     "__init__.py"
@@ -22,26 +20,64 @@ PYGOB_FILES=(
     "types.py"
 )
 
-check_dependencies() {
-    local missing=()
-    local common_deps=(curl jq unrar python3 python3-venv wine)
-    local gui_deps=(zenity yad)
+get_latest_release_rar_url() {
+    curl -s "https://api.github.com/repos/SteamAutoCracks/DepotDownloaderMod/releases/latest" \
+        | jq -r '.assets[] | select(.name=="Release.rar") | .browser_download_url'
+}
 
-    for dep in "${common_deps[@]}"; do
-        command -v "$dep" >/dev/null || missing+=("$dep")
-    done
-
-    if ! [ -t 0 ]; then
-        for dep in "${gui_deps[@]}"; do
-            command -v "$dep" >/dev/null || missing+=("$dep")
-        done
-    fi
-
-    if (( ${#missing[@]} )); then
-        echo "Missing required dependencies: ${missing[*]}"
-        echo "Please install them using your package manager before running this script."
+get_steam_libraries() {
+    local vdf_file="$HOME/.local/share/Steam/config/libraryfolders.vdf"
+    if [[ ! -f "$vdf_file" ]]; then
+        echo "Error: Steam VDF file not found at $vdf_file" >&2
         exit 1
     fi
+
+    local paths=()
+    local inside_number_block=0
+
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^\"([0-9]+)\"[[:space:]]*\{$ ]]; then
+            inside_number_block=1
+            continue
+        elif [[ "$line" =~ ^\}$ && $inside_number_block -eq 1 ]]; then
+            inside_number_block=0
+            continue
+        fi
+        if (( inside_number_block == 1 )) && [[ "$line" =~ \"path\"[[:space:]]+\"([^\"]+)\" ]]; then
+            paths+=("${BASH_REMATCH[1]}")
+        fi
+    done < "$vdf_file"
+
+    if (( ${#paths[@]} == 0 )); then
+        while IFS= read -r line; do
+            if [[ "$line" =~ \"path\"[[:space:]]+\"([^\"]+)\" ]]; then
+                paths+=("${BASH_REMATCH[1]}")
+            fi
+        done < "$vdf_file"
+    fi
+
+    if (( ${#paths[@]} == 0 )); then
+        echo "No Steam library paths found in $vdf_file" >&2
+        exit 1
+    fi
+
+    for p in "${paths[@]}"; do
+        echo "$p"
+    done
+}
+
+find_target_dir() {
+    local game="$1"
+    while true; do
+        for path in $(get_steam_libraries); do
+            local fullpath="$path/steamapps/common/$game"
+            if [[ -d "$fullpath" ]]; then
+                echo "$fullpath"
+                return 0
+            fi
+        done
+        sleep 1
+    done
 }
 
 download_files() {
@@ -80,9 +116,18 @@ install_game_core() {
 
     find "$BASE_DIR" -type f \( -name "*.bat" -o -name "*.key" -o -name "*.manifest" \) -delete
 
+    rm -rf "$DEPOTS_DIR"/*
+
     printf "%s\n1\n" "$appid" | PYTHONPATH="$BASE_DIR" "$PYTHON_BIN" "$LOCAL_PY_FILE"
 
-    curl -fsSL -o "$RAR_PATH" "$RAR_URL"
+    local rar_url
+    rar_url=$(get_latest_release_rar_url)
+    if [[ -z "$rar_url" ]]; then
+        echo "Failed to get latest Release.rar URL" >&2
+        exit 1
+    fi
+
+    curl -fsSL -o "$RAR_PATH" "$rar_url"
     unrar x -o+ "$RAR_PATH" "$BASE_DIR"
     local netdir="$RELEASE_DIR/net9.0"
     find "$netdir" -type f \( -name "*.json" -o -name "*.dll" -o -name "*.exe" \) -exec cp -f {} "$BASE_DIR/" \;
@@ -99,7 +144,7 @@ install_game_core() {
 
     while [ -z "$(ls -A "$DEPOTS_DIR")" ]; do sleep 1; done
 
-    local combined="$DEPOTS_DIR/$appid"
+    local combined="$DEPOTS_DIR/$gamename"
     mkdir -p "$combined"
     shopt -s dotglob
     for d in "$DEPOTS_DIR"/*/ ; do
@@ -115,8 +160,8 @@ install_game_core() {
 
     steam "steam://rungameid/$appid" & disown
 
-    local target_dir="$STEAM_COMMON/$gamename"
-    while [[ ! -d "$target_dir" ]]; do sleep 1; done
+    local target_dir
+    target_dir=$(find_target_dir "$gamename")
 
     local random_subdir
     random_subdir=$(find "$combined" -mindepth 1 -maxdepth 1 -type d | head -n 1)
@@ -126,7 +171,6 @@ install_game_core() {
 }
 
 interactive_cli() {
-    check_dependencies
     mkdir -p "$BASE_DIR" "$PYGOB_DIR" "$DEPOTS_DIR"
     cd "$BASE_DIR"
 
@@ -139,6 +183,7 @@ interactive_cli() {
     download_files
     setup_venv_and_deps
 
+    local GAME_NAME
     GAME_NAME=$(fetch_game_name "$APP_ID")
     if [[ -z "$GAME_NAME" ]]; then
         echo "Could not retrieve game name. Exiting."
@@ -151,11 +196,165 @@ interactive_cli() {
     echo "Game installed successfully! Have fun playing."
 }
 
-gui_mode() {
-    check_dependencies
+install_slssteam() {
+    cd "$HOME" || exit 1
+
+    rm -rf SLSsteam
+
+    git clone "https://github.com/AceSLS/SLSsteam"
+    cd SLSsteam || exit 1
+
+    make
+
+    mkdir -p ~/.local/share/SLSsteam
+    cp bin/SLSsteam.so ~/.local/share/SLSsteam/SLSsteam.so
+
+    local patch_line='export LD_AUDIT="$HOME/.local/share/SLSsteam/SLSsteam.so"'
+
+    pkexec bash -c "
+      sed -i '/LD_AUDIT=.*SLSsteam.so/d' /usr/bin/steam
+      sed -i '2i $patch_line' /usr/bin/steam
+    "
+
+    cd "$HOME" || exit 1
+    rm -rf SLSsteam
+
+    zenity --info --text="SLSsteam installed and /usr/bin/steam patched successfully!" --width=300 --height=100
+}
+
+patch_with_steamless() {
+    mkdir -p "$BASE_DIR"
+    local libraries=($(get_steam_libraries))
+    local games=()
+
+    for lib in "${libraries[@]}"; do
+        local manifest_dir="$lib/steamapps"
+        for mf in "$manifest_dir"/appmanifest_*.acf; do
+            [[ -f "$mf" ]] || continue
+            local appid name
+            appid=$(grep '"appid"' "$mf" | grep -oE '[0-9]+')
+            name=$(grep '"name"' "$mf" | head -n1 | sed -E 's/.*"name"[[:space:]]+"([^"]+)".*/\1/')
+            [[ -n "$appid" && -n "$name" ]] && games+=("$appid::$name")
+        done
+    done
+
+    if [[ ${#games[@]} -eq 0 ]]; then
+        if [ -t 0 ]; then
+            echo "No installed Steam games found."
+        else
+            zenity --error --text="No installed Steam games found."
+        fi
+        return
+    fi
+
+    local selection=""
+    local selected_appid=""
+    if [ -t 0 ]; then
+        echo "Select a game to patch:"
+        for i in "${!games[@]}"; do
+            echo "$((i+1))) ${games[i]##*::}"
+        done
+        read -rp "Choice: " choice
+        [[ "$choice" =~ ^[0-9]+$ ]] || return
+        ((choice--))
+        [[ $choice -lt 0 || $choice -ge ${#games[@]} ]] && return
+        selection="${games[choice]##*::}"
+        selected_appid="${games[choice]%%::*}"
+    else
+        selection=$(zenity --list --title="Select Game" --column="Game" --width=500 --height=400 "${games[@]##*::}")
+        [[ -z "$selection" ]] && return
+        for g in "${games[@]}"; do
+            if [[ "${g##*::}" == "$selection" ]]; then
+                selected_appid="${g%%::*}"
+                break
+            fi
+        done
+        [[ -z "$selected_appid" ]] && zenity --error --text="App ID not found." && return
+    fi
+
+    # Find the actual game folder path by matching folder name exactly
+    local game_dir=""
+    for lib in "${libraries[@]}"; do
+        for d in "$lib/steamapps/common/"*; do
+            [[ -d "$d" ]] || continue
+            if [[ "$(basename "$d")" == "$selection" ]]; then
+                game_dir="$d"
+                break 2
+            fi
+        done
+    done
+
+    if [[ -z "$game_dir" ]]; then
+        if [ -t 0 ]; then
+            echo "Could not find game folder for '$selection'"
+        else
+            zenity --error --text="Could not find game folder for '$selection'"
+        fi
+        return 1
+    fi
+
+    cd "$BASE_DIR"
+    curl -L -o steamless.zip "https://github.com/atom0s/Steamless/releases/download/v3.1.0.5/Steamless.v3.1.0.5.-.by.atom0s.zip"
+
+    rm -rf steamless
+    mkdir -p steamless
+    unzip -oq steamless.zip -d steamless
+
+    rm -f steamless.zip
+
+    mapfile -t exe_list < <(find "$game_dir" -type f -iname "*.exe")
+
+    if [[ ${#exe_list[@]} -eq 0 ]]; then
+        if [ -t 0 ]; then
+            echo "No .exe files found in game folder."
+        else
+            zenity --error --text="No .exe files found in game folder."
+        fi
+        return 1
+    fi
+
+    local exe_choice=""
+    if [ -t 0 ]; then
+        echo "Available EXE files:"
+        for i in "${!exe_list[@]}"; do
+            echo "$((i+1))) ${exe_list[i]}"
+        done
+        read -rp "Choice: " exe_index
+        [[ "$exe_index" =~ ^[0-9]+$ ]] || return
+        ((exe_index--))
+        exe_choice="${exe_list[exe_index]}"
+    else
+        exe_choice=$(zenity --list --title="Choose EXE to Patch" \
+            --text="Select an .exe to patch using Steamless" \
+            --column="Executable Path" \
+            --width=700 --height=400 "${exe_list[@]}")
+        [[ -z "$exe_choice" ]] && return
+    fi
+
+    WINEDEBUG=-all wine "$BASE_DIR/steamless/Steamless.CLI.exe" "$exe_choice"
+
+    if [[ -f "$exe_choice.unpacked.exe" ]]; then
+        mv "$exe_choice" "$exe_choice.bak"
+        mv "$exe_choice.unpacked.exe" "$exe_choice"
+        if [ -t 0 ]; then
+            echo "Executable unpacked and patched successfully!"
+        else
+            zenity --info --text="Executable unpacked and patched successfully!"
+        fi
+    else
+        if [ -t 0 ]; then
+            echo "Unpacking failed. No output file created."
+        else
+            zenity --error --text="Unpacking failed. No output file created."
+        fi
+    fi
+}
+
+gui_install_game() {
     mkdir -p "$BASE_DIR" "$PYGOB_DIR" "$DEPOTS_DIR"
     cd "$BASE_DIR"
 
+    local APP_ID
     APP_ID=$(zenity --entry --title="Enter Steam App ID" --text="Please enter the Steam App ID:" --width=300)
     if [[ -z "$APP_ID" ]]; then
         zenity --error --text="You must enter a valid App ID. Exiting."
@@ -169,6 +368,7 @@ gui_mode() {
     download_files
     setup_venv_and_deps
 
+    local GAME_NAME
     GAME_NAME=$(fetch_game_name "$APP_ID")
     if [[ -z "$GAME_NAME" ]]; then
         zenity --error --text="Could not retrieve game name. Exiting."
@@ -186,8 +386,49 @@ gui_mode() {
     echo "[DONE] All steps completed successfully."
 }
 
+gui_menu() {
+    local choice
+    choice=$(zenity --list \
+        --title="AutoDepot Menu" \
+        --column="Option" --column="Description" \
+        --width=450 --height=300 \
+        --hide-column=0 \
+        1 "Download & install game by Steam App ID" \
+        2 "Install SLSsteam" \
+        3 "Patch with Steamless")
+
+    if [[ -z "$choice" ]]; then
+        exit 0
+    fi
+
+    case "$choice" in
+        1) gui_install_game ;;
+        2) install_slssteam ;;
+        3) patch_with_steamless ;;
+        *) zenity --error --text="No valid option selected. Exiting." --width=300 --height=100; exit 1 ;;
+    esac
+}
+
 if [ -t 0 ]; then
-    interactive_cli
+    main_menu() {
+        while true; do
+            echo "==== AutoDepot Menu ===="
+            echo "1) Download & install game by Steam App ID"
+            echo "2) Install SLSsteam"
+            echo "3) Patch with Steamless"
+            echo "4) Exit"
+            echo "========================"
+            read -rp "Choose an option [1-4]: " choice
+            case "$choice" in
+                1) interactive_cli ;;
+                2) install_slssteam ;;
+                3) patch_with_steamless ;;
+                4) echo "Exiting."; exit 0 ;;
+                *) echo "Invalid choice. Try again." ;;
+            esac
+        done
+    }
+    main_menu
 else
-    gui_mode
+    gui_menu
 fi
