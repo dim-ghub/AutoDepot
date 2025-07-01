@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE_DIR="$HOME/AutoDepot"
+BASE_DIR="$HOME/Vapor"
 VENV_DIR="$BASE_DIR/venv"
 PYGOB_DIR="$BASE_DIR/pygob"
 DEPOTS_DIR="$BASE_DIR/depots"
@@ -527,6 +527,42 @@ patch_with_goldberg() {
     [ -t 0 ] && echo "Goldberg emulator patched '$selection' successfully." || zenity --info --text="Goldberg emulator patched '$selection' successfully." --width=350 --height=100
 }
 
+setup_sme() {
+    local sme_dir="$BASE_DIR/SME"
+    local repo_url="https://github.com/tralph3/Steam-Metadata-Editor.git"
+
+    rm -rf "$sme_dir"
+    if ! git clone "$repo_url" "$sme_dir"; then
+        if [[ -t 1 ]]; then
+            echo "[ERROR] Failed to clone SME"
+        else
+            zenity --error --text="[ERROR] Failed to clone SME" --no-wrap
+        fi
+        return 1
+    fi
+
+    find "$sme_dir" -mindepth 1 -maxdepth 1 ! -name src -exec rm -rf {} +
+    mv "$sme_dir/src/"* "$sme_dir/"
+    rm -rf "$sme_dir/src"
+
+    if [[ -t 1 ]]; then
+        echo "[INFO] SME setup complete at $sme_dir"
+    else
+        zenity --info --text="[INFO] SME setup complete at $sme_dir" --no-wrap
+    fi
+}
+
+run_sme() {
+    if ! /usr/bin/env python3 "$BASE_DIR/SME/main.py" "$@"; then
+        if [[ -t 1 ]]; then
+            echo "[ERROR] Failed to run SME"
+        else
+            zenity --error --text="[ERROR] Failed to run SME" --no-wrap
+        fi
+        return 1
+    fi
+}
+
 gui_install_game() {
     mkdir -p "$BASE_DIR" "$PYGOB_DIR" "$DEPOTS_DIR"
     cd "$BASE_DIR"
@@ -564,7 +600,7 @@ gui_install_game() {
         done
     fi
 
-    yad --title="AutoDepot Installer" \
+    yad --title="Vapor Installer" \
         --text="Installing game...\n\nJust sit back and relax, you'll be notified when the game is installed." \
         --borders=10 --center --width=350 --button=OK &
 
@@ -572,7 +608,7 @@ gui_install_game() {
     setup_venv_and_deps
     install_game_core "$APP_ID" "$GAME_NAME"
 
-    yad --title="AutoDepot Installer" \
+    yad --title="Vapor Installer" \
         --text="Game installed successfully!\n\nHave fun playing!" \
         --borders=10 --center --width=350 --button=OK
 
@@ -582,14 +618,16 @@ gui_install_game() {
 gui_menu() {
     local choice
     choice=$(zenity --list \
-        --title="AutoDepot Menu" \
+        --title="Vapor Menu" \
         --column="Option" --column="Description" \
         --width=450 --height=300 \
         --hide-column=0 \
         1 "Download & install game by Steam App ID" \
         2 "Install SLSsteam" \
         3 "Patch with Steamless" \
-        4 "Patch with Goldberg")
+        4 "Patch with Goldberg" \
+        5 "Install Steam Metadata Editor" \
+        6 "Run Steam Metadata Editor")
 
     if [[ -z "$choice" ]]; then
         exit 0
@@ -600,6 +638,8 @@ gui_menu() {
         2) install_slssteam ;;
         3) patch_with_steamless ;;
         4) patch_with_goldberg ;;
+        5) setup_sme ;;
+        6) run_sme ;;
         *) zenity --error --text="No valid option selected. Exiting." --width=300 --height=100; exit 1 ;;
     esac
 }
@@ -607,20 +647,24 @@ gui_menu() {
 if [ -t 0 ]; then
     main_menu() {
         while true; do
-            echo "==== AutoDepot Menu ===="
+            echo "==== Vapor Menu ===="
             echo "1) Download & install game by Steam App ID"
             echo "2) Install SLSsteam"
             echo "3) Patch with Steamless"
             echo "4) Patch with Goldberg"
-            echo "5) Exit"
+            echo "5) Install Steam Metadata Editor"
+            echo "6) Run Steam Metadata Editor"
+            echo "7) Exit"
             echo "========================"
-            read -rp "Choose an option [1-4]: " choice
+            read -rp "Choose an option [1-7]: " choice
             case "$choice" in
                 1) interactive_cli ;;
                 2) install_slssteam ;;
                 3) patch_with_steamless ;;
                 4) patch_with_goldberg ;;
-                5) echo "Exiting."; exit 0 ;;
+                5) setup_sme ;;
+                6) run_sme ;;
+                7) echo "Exiting."; exit 0 ;;
                 *) echo "Invalid choice. Try again." ;;
             esac
         done
