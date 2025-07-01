@@ -1,6 +1,6 @@
 [Desktop Entry]
-Name=AutoDepot
-Comment=Fetch and run Steam depots automatically
+Name=Vapor
+Comment=Collection of tools for Steam
 Exec=
 Icon=steam
 Terminal=false
