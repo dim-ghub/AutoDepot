@@ -183,25 +183,44 @@ interactive_cli() {
     mkdir -p "$BASE_DIR" "$PYGOB_DIR" "$DEPOTS_DIR"
     cd "$BASE_DIR"
 
-    read -rp "Enter Steam App ID: " APP_ID
-    if [[ -z "$APP_ID" ]]; then
-        echo "You must enter a valid App ID. Exiting."
-        exit 1
+    read -rp "Enter a Steam App ID or game name: " input
+    [[ -z "$input" ]] && echo "You must enter a valid input. Exiting." && exit 1
+
+    local APP_ID GAME_NAME
+
+    if [[ "$input" =~ ^[0-9]+$ ]]; then
+        APP_ID="$input"
+        GAME_NAME=$(fetch_game_name "$APP_ID")
+        [[ -z "$GAME_NAME" ]] && echo "Could not retrieve game name. Exiting." && exit 1
+    else
+        local term
+        term=$(printf "%s" "$input" | jq -sRr @uri)
+        mapfile -t results < <(
+            curl -s "https://store.steampowered.com/api/storesearch/?term=$term&cc=us&l=en" \
+            | jq -r '.items[] | "\(.id)::\(.name)"'
+        )
+
+        [[ ${#results[@]} -eq 0 ]] && echo "No results found. Try a different name." && exit 1
+
+        echo "Select a game:"
+        for i in "${!results[@]}"; do
+            echo "$((i+1))) ${results[i]##*::}"
+        done
+        read -rp "Choice [1-${#results[@]}]: " choice
+        [[ "$choice" =~ ^[0-9]+$ ]] || exit 1
+        ((choice--))
+        [[ $choice -lt 0 || $choice -ge ${#results[@]} ]] && exit 1
+
+        APP_ID="${results[choice]%%::*}"
+        GAME_NAME="${results[choice]##*::}"
     fi
+
+    echo "Installing: $GAME_NAME (AppID: $APP_ID)"
 
     download_files
     setup_venv_and_deps
-
-    local GAME_NAME
-    GAME_NAME=$(fetch_game_name "$APP_ID")
-    if [[ -z "$GAME_NAME" ]]; then
-        echo "Could not retrieve game name. Exiting."
-        exit 1
-    else
-        echo "Game detected: $GAME_NAME"
-    fi
-
     install_game_core "$APP_ID" "$GAME_NAME"
+
     echo "Game installed successfully! Have fun playing."
 }
 
@@ -512,11 +531,37 @@ gui_install_game() {
     mkdir -p "$BASE_DIR" "$PYGOB_DIR" "$DEPOTS_DIR"
     cd "$BASE_DIR"
 
-    local APP_ID
-    APP_ID=$(zenity --entry --title="Enter Steam App ID" --text="Please enter the Steam App ID:" --width=300)
-    if [[ -z "$APP_ID" ]]; then
-        zenity --error --text="You must enter a valid App ID. Exiting."
-        exit 1
+    local input
+    input=$(zenity --entry --title="Enter Game" --text="Enter a Steam App ID or game name:" --width=300)
+    [[ -z "$input" ]] && zenity --error --text="Input required. Exiting." && exit 1
+
+    local APP_ID GAME_NAME
+
+    if [[ "$input" =~ ^[0-9]+$ ]]; then
+        APP_ID="$input"
+        GAME_NAME=$(fetch_game_name "$APP_ID")
+        [[ -z "$GAME_NAME" ]] && zenity --error --text="Could not retrieve game name. Exiting." && exit 1
+    else
+        local term
+        term=$(printf "%s" "$input" | jq -sRr @uri)
+        mapfile -t results < <(
+            curl -s "https://store.steampowered.com/api/storesearch/?term=$term&cc=us&l=en" \
+            | jq -r '.items[] | "\(.id)::\(.name)"'
+        )
+
+        [[ ${#results[@]} -eq 0 ]] && zenity --error --text="No results found. Try a different name." && exit 1
+
+        local choice
+        choice=$(zenity --list --title="Select Game" --column="Game" "${results[@]##*::}")
+        [[ -z "$choice" ]] && zenity --error --text="No game selected." && exit 1
+
+        for r in "${results[@]}"; do
+            if [[ "${r##*::}" == "$choice" ]]; then
+                APP_ID="${r%%::*}"
+                GAME_NAME="$choice"
+                break
+            fi
+        done
     fi
 
     yad --title="AutoDepot Installer" \
@@ -525,16 +570,6 @@ gui_install_game() {
 
     download_files
     setup_venv_and_deps
-
-    local GAME_NAME
-    GAME_NAME=$(fetch_game_name "$APP_ID")
-    if [[ -z "$GAME_NAME" ]]; then
-        zenity --error --text="Could not retrieve game name. Exiting."
-        exit 1
-    else
-        zenity --info --text="Game detected: $GAME_NAME"
-    fi
-
     install_game_core "$APP_ID" "$GAME_NAME"
 
     yad --title="AutoDepot Installer" \
