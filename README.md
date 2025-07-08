@@ -1,5 +1,5 @@
-# AutoDepot
-If you're here, you know what this is.
+# Vapor
+A menu for various tools and automation scripts for Steam on linux.
 
 For installation:
 
